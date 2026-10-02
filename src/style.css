@@ -1,12 +1,11 @@
 .main-window-parent {
-    background-color: #000000FF;
-    color: white;
-
-    border: 1px solid #3a3a3a;
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+    border: 1px solid @borders;
 }
 
 .main-container {
-    background-color: #00000000;
+    background-color: transparent;
 }
 
 .warning-icon {
@@ -21,11 +20,11 @@
 }
 
 .slow-icon {
-    color: lightsalmon;
+    color: @warning_color;
 }
 
 .slowest-icon {
-    color: lightcoral;
+    color: @error_color;
 }
 
 .keep-above-tip {
@@ -38,14 +37,14 @@
 
 @keyframes flashing {
     0% {
-      color: yellow;
+      color: @warning_color;
     }
   
     50% {
-      color: red;
+      color: @error_color;
     }
 
     100% {
-      color: yellow;
+      color: @warning_color;
     }
 }
