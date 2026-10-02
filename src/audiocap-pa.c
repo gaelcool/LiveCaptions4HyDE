@@ -41,6 +41,7 @@ struct audio_thread_pa_i {
 
     char *sink_name;
     char *source_name;
+    bool source_info_ready;
 
     pa_threaded_mainloop *mainloop;
     pa_mainloop_api *mainloop_api;
@@ -53,18 +54,55 @@ static void context_state_cb(pa_context* context, void* userdata);
 static void stream_state_cb(pa_stream *s, void *userdata);
 static void stream_success_cb(pa_stream *stream, int success, void *userdata);
 static void stream_read_cb(pa_stream *stream, size_t nbytes, void *userdata);
+static void sink_info_callback(pa_context *c, const pa_sink_info *i, int eol, void *userdata);
 
 static void server_info_callback(pa_context *c, const pa_server_info *i, void *userdata){
     audio_thread_pa data = (audio_thread_pa)userdata;
 
-    data->source_name = (char *)calloc(1, strlen(i->default_source_name) + 1);
-    strcpy(data->source_name, i->default_source_name);
+    if(data->microphone) {
+        if(i->default_source_name != NULL) {
+            data->source_name = g_strdup(i->default_source_name);
+        }
+        data->source_info_ready = true;
+        pa_threaded_mainloop_signal(data->mainloop, 0);
+        return;
+    }
 
-    data->sink_name = (char *)calloc(1, strlen(i->default_sink_name) + 9);
-    strcpy(data->sink_name, i->default_sink_name);
-    strcat(data->sink_name, ".monitor");
+    if(i->default_sink_name == NULL) {
+        data->source_info_ready = true;
+        pa_threaded_mainloop_signal(data->mainloop, 0);
+        return;
+    }
 
-    pa_threaded_mainloop_signal(data->mainloop, 0);
+    data->sink_name = g_strdup(i->default_sink_name);
+    pa_operation_unref(pa_context_get_sink_info_by_name(c, data->sink_name, sink_info_callback, data));
+}
+
+static void sink_info_callback(G_GNUC_UNUSED pa_context *c, const pa_sink_info *i, int eol, void *userdata) {
+    audio_thread_pa data = (audio_thread_pa)userdata;
+
+    if(i != NULL && i->monitor_source_name != NULL && data->source_name == NULL) {
+        data->source_name = g_strdup(i->monitor_source_name);
+    }
+
+    if(eol != 0) {
+        data->source_info_ready = true;
+        pa_threaded_mainloop_signal(data->mainloop, 0);
+    }
+}
+
+static bool wait_for_source_info(audio_thread_pa data) {
+    pa_context_get_server_info(data->context, server_info_callback, data);
+    while(!data->source_info_ready) {
+        pa_threaded_mainloop_wait(data->mainloop);
+    }
+
+    if(data->source_name == NULL) {
+        g_warning("Unable to find an audio source for Live Captions");
+        return false;
+    }
+
+    return true;
 }
 
 void *run_audio_thread_pa(void *userdata) {
@@ -95,10 +133,9 @@ void *run_audio_thread_pa(void *userdata) {
         pa_threaded_mainloop_wait(data->mainloop);
     }
 
-    pa_context_get_server_info(data->context, server_info_callback, data);
-    for(;;) {
-        if(data->source_name != NULL) break;
-        pa_threaded_mainloop_wait(data->mainloop);
+    if(!wait_for_source_info(data)) {
+        pa_threaded_mainloop_unlock(data->mainloop);
+        return NULL;
     }
 
     // Create a recording stream
@@ -130,8 +167,7 @@ void *run_audio_thread_pa(void *userdata) {
         PA_STREAM_NOT_MONOTONIC | PA_STREAM_AUTO_TIMING_UPDATE |
         PA_STREAM_ADJUST_LATENCY;
 
-    const char *dev_name = data->microphone ? NULL : data->sink_name;
-    assert(pa_stream_connect_record(data->stream, dev_name, &buffer_attr, stream_flags) == 0);
+    assert(pa_stream_connect_record(data->stream, data->source_name, &buffer_attr, stream_flags) == 0);
 
     // Wait for the stream to be ready
     for(;;) {
